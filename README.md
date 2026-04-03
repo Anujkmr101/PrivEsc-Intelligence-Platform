@@ -444,6 +444,6 @@ This tool is intended for use by authorized security professionals during legiti
 
 Built for security professionals, by security professionals.
 
-If PIP helped your engagement, consider starring the repo ⭐
+If PIP helped your engagement, consider starring the repo 
 
 </div>
