@@ -1,0 +1,22 @@
+# ── Core runtime ──────────────────────────────────────────────────────────────
+typer[all]>=0.12.0          # CLI framework with rich integration
+rich>=13.7.0                 # Terminal output, progress bars, tables
+pydantic>=2.6.0              # Data validation and config models
+
+# ── Intelligence layer ─────────────────────────────────────────────────────────
+networkx>=3.3                # Directed attack graph construction and path finding
+
+# ── REST API ───────────────────────────────────────────────────────────────────
+fastapi>=0.110.0             # REST API framework
+uvicorn[standard]>=0.29.0   # ASGI server for REST API
+python-jose[cryptography]>=3.3.0  # JWT token validation
+
+# ── Reporting ──────────────────────────────────────────────────────────────────
+jinja2>=3.1.4                # HTML report templating
+weasyprint>=62.0             # PDF generation from HTML (optional — install separately)
+
+# ── Data handling ──────────────────────────────────────────────────────────────
+# (stdlib only: json, sqlite3, pathlib — no extra deps required)
+
+# ── Dev / test (not installed in production) ───────────────────────────────────
+# Install with: pip install -r requirements-dev.txt

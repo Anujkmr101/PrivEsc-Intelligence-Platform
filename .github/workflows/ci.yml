@@ -1,0 +1,182 @@
+name: PIP CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Lint and type check ────────────────────────────────────────────────────
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Ruff lint
+        run: ruff check pip/ tests/ plugins/
+
+      - name: Ruff format check
+        run: ruff format --check pip/ tests/ plugins/
+
+      - name: Mypy type check
+        run: mypy pip/ --ignore-missing-imports
+
+      - name: Bandit security scan (PIP source code)
+        run: bandit -r pip/ -ll --exclude pip/api/,pip/core/shell_compat.py
+        # shell_compat and api are intentionally permissive (pentest tool)
+
+  # ── Tests ──────────────────────────────────────────────────────────────────
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run unit and integration tests
+        run: |
+          pytest tests/ -v \
+            --tb=short \
+            --cov=pip \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-fail-under=60
+
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.11'
+        uses: codecov/codecov-action@v4
+        with:
+          file: coverage.xml
+          flags: unittests
+          fail_ci_if_error: false
+
+  # ── Knowledge base sync check ──────────────────────────────────────────────
+  kb-check:
+    name: Knowledge Base Import Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install runtime deps
+        run: pip install -r requirements.txt
+
+      - name: Import check (all core modules)
+        run: |
+          python -c "from pip.models.finding import Finding, FindingCategory, Severity"
+          python -c "from pip.models.attack_path import AttackPath, AttackStep"
+          python -c "from pip.models.context import ScanConfig, SystemContext"
+          python -c "from pip.core.orchestrator import Orchestrator"
+          python -c "from pip.core.context_engine import ContextEngine"
+          python -c "from pip.core.stealth_engine import StealthEngine"
+          python -c "from pip.core.shell_compat import ShellCompat"
+          python -c "from pip.analysis.correlation_graph import CorrelationGraphEngine"
+          python -c "from pip.analysis.mitre_mapper import MitreMapper"
+          python -c "from pip.scoring.risk_scorer import RiskScorer"
+          python -c "from pip.scoring.fp_reducer import FPReducer"
+          python -c "from pip.reporting.executive import ExecutiveReporter"
+          python -c "from pip.reporting.technical import TechnicalReporter"
+          python -c "from pip.reporting.blue_team import BlueTeamReporter"
+          echo "All core imports successful"
+
+  # ── Plugin interface check ─────────────────────────────────────────────────
+  plugin-check:
+    name: Plugin Interface Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install runtime deps
+        run: pip install -r requirements.txt
+
+      - name: Validate all plugins implement correct interface
+        run: |
+          python - << 'EOF'
+          import importlib, pkgutil, sys
+          from pathlib import Path
+          sys.path.insert(0, '.')
+
+          errors = []
+          for category in ('enum', 'exploit', 'cloud', 'correlation'):
+              path = Path('plugins') / category
+              for _, name, _ in pkgutil.iter_modules([str(path)]):
+                  if name.startswith('_') or name == 'example_custom_check':
+                      continue
+                  try:
+                      mod = importlib.import_module(f'plugins.{category}.{name}')
+                      for attr in dir(mod):
+                          cls = getattr(mod, attr)
+                          if isinstance(cls, type) and hasattr(cls, 'run') and attr[0].isupper():
+                              if not hasattr(cls, 'name'):
+                                  errors.append(f'{name}.{attr}: missing `name` attribute')
+                  except Exception as e:
+                      errors.append(f'{category}/{name}: import error — {e}')
+
+          if errors:
+              print('Plugin validation errors:')
+              for e in errors:
+                  print(f'  {e}')
+              sys.exit(1)
+          print('All plugins validated successfully')
+          EOF
+
+  # ── Build check ────────────────────────────────────────────────────────────
+  build:
+    name: Package Build
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: pip install hatch
+
+      - name: Build wheel and sdist
+        run: hatch build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pip-toolkit-dist
+          path: dist/
+          retention-days: 7
