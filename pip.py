@@ -35,9 +35,9 @@ signal.signal(signal.SIGINT, _handle_sigint)
 
 @app.command()
 def scan(
-    mode: ScanMode = typer.Option(ScanMode.deep, "--mode", "-m", help="Scan depth profile."),
-    stealth: StealthProfile = typer.Option(StealthProfile.normal, "--stealth", "-s", help="Noise control profile."),
-    report: list[ReportType] = typer.Option([ReportType.all], "--report", "-r", help="Report types to generate."),
+    mode: ScanMode = typer.Option(ScanMode.DEEP, "--mode", "-m", help="Scan depth profile."),
+    stealth: StealthProfile = typer.Option(StealthProfile.NORMAL, "--stealth", "-s", help="Noise control profile."),
+    report: list[ReportType] = typer.Option([ReportType.ALL], "--report", "-r", help="Report types to generate."),
     exploit: bool = typer.Option(False, "--exploit", help="Enable controlled exploit execution (requires consent gate)."),
     confirm_each: bool = typer.Option(False, "--confirm-each", help="Require confirmation before each exploit step."),
     mitre_map: bool = typer.Option(True, "--mitre-map/--no-mitre-map", help="Tag findings to MITRE ATT&CK T-codes."),

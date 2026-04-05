@@ -25,7 +25,7 @@ from rich.live import Live
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from pip.models.context import ScanConfig, SystemContext, UserContext
+from pip.models.context import ScanConfig, SystemContext, UserContext, ScanMode, EnvironmentType
 from pip.models.finding import Finding
 from pip.models.attack_path import AttackPath
 from pip.core.context_engine import ContextEngine
@@ -212,13 +212,15 @@ class Orchestrator:
 
         modules = [SmartEnumModule(self.config)]
 
-        if self.config.mode.value in ("deep", "normal"):
+        if self.config.mode in (ScanMode.DEEP, ScanMode.STEALTH):
             modules.append(CredentialIntelModule(self.config))
             modules.append(LateralAwarenessModule(self.config))
 
         if (
             self.config.cloud_hint
-            or self.system_ctx.environment_type.value in ("docker", "kubernetes", "cloud")
+            or self.system_ctx.environment_type in (
+                EnvironmentType.DOCKER, EnvironmentType.KUBERNETES, EnvironmentType.CLOUD
+            )
             or self.config.imds_check
         ):
             modules.append(CloudContainerModule(self.config))

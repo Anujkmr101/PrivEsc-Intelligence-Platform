@@ -78,21 +78,34 @@ class ContextEngine:
 
     def _detect_user(self, ctx: UserContext) -> None:
         """Populate current user identity and sudo permissions."""
+        import platform
         ctx.username = self._run("whoami").strip()
-        ctx.uid = os.getuid()
-        ctx.gid = os.getgid()
-        ctx.home_dir = os.environ.get("HOME", "")
-        ctx.shell = os.environ.get("SHELL", "")
 
-        # Parse group membership
-        groups_out = self._run("id").strip()
-        ctx.groups = re.findall(r"\((\w+)\)", groups_out)
+        # uid/gid are Linux-only — use safe fallbacks on Windows
+        if hasattr(os, "getuid"):
+            ctx.uid = os.getuid()
+            ctx.gid = os.getgid()
+        else:
+            # Windows: no real uid concept; use 0 as placeholder
+            ctx.uid = 0
+            ctx.gid = 0
 
-        # Sudo rules (non-interactive, safe to run without password)
-        sudo_out = self._run("sudo -nl 2>/dev/null").strip()
-        if "NOPASSWD" in sudo_out:
-            ctx.sudo_nopasswd = True
-            ctx.sudo_commands = re.findall(r"NOPASSWD:\s*(.+)", sudo_out)
+        ctx.home_dir = os.environ.get("HOME", os.environ.get("USERPROFILE", ""))
+        ctx.shell    = os.environ.get("SHELL", os.environ.get("COMSPEC", ""))
+
+        # Group membership — id works on Linux/WSL; skip on native Windows
+        if platform.system() != "Windows":
+            groups_out = self._run("id").strip()
+            ctx.groups = re.findall(r"\((\w+)\)", groups_out)
+        else:
+            ctx.groups = []
+
+        # Sudo rules only exist on Linux/macOS
+        if platform.system() != "Windows":
+            sudo_out = self._run("sudo -nl 2>/dev/null").strip()
+            if "NOPASSWD" in sudo_out:
+                ctx.sudo_nopasswd = True
+                ctx.sudo_commands = re.findall(r"NOPASSWD:\s*(.+)", sudo_out)
 
         ctx.is_service_account = ctx.uid >= 1000 and ctx.username not in ("root",)
 
@@ -100,8 +113,14 @@ class ContextEngine:
 
     def _detect_os(self, ctx: SystemContext) -> None:
         """Detect OS name, version, hostname."""
-        ctx.hostname = self._run("hostname").strip()
-        ctx.arch = self._run("uname -m").strip()
+        import platform
+        ctx.hostname = self._run("hostname").strip() or platform.node()
+        ctx.arch     = platform.machine() or self._run("uname -m").strip()
+
+        if platform.system() == "Windows":
+            ctx.os_name    = "Windows"
+            ctx.os_version = platform.version()
+            return
 
         os_release = self._read_file("/etc/os-release")
         if os_release:
@@ -110,13 +129,17 @@ class ContextEngine:
             ctx.os_name    = name_match.group(1) if name_match else "Unknown"
             ctx.os_version = ver_match.group(1) if ver_match else ""
         else:
-            # Fallback for minimal containers
             ctx.os_name = self._run("cat /etc/issue 2>/dev/null | head -1").strip()
 
     # ── Kernel detection ──────────────────────────────────────────────────────
 
     def _detect_kernel(self, ctx: SystemContext) -> None:
         """Extract kernel version for exploit-suggester matching."""
+        import platform
+        if platform.system() == "Windows":
+            ctx.kernel_full    = platform.version()
+            ctx.kernel_version = platform.release()
+            return
         ctx.kernel_full    = self._run("uname -r").strip()
         ctx.kernel_version = self._parse_kernel_version(ctx.kernel_full)
 
@@ -130,6 +153,13 @@ class ContextEngine:
 
     def _detect_environment_type(self, ctx: SystemContext) -> None:
         """Distinguish bare metal, VM, Docker, K8s, or cloud instance."""
+        import platform
+
+        # On Windows: skip all Linux-specific checks
+        if platform.system() == "Windows":
+            ctx.environment_type = EnvironmentType.BARE_METAL
+            return
+
         # Docker: check for .dockerenv or cgroup evidence
         if os.path.exists("/.dockerenv"):
             ctx.environment_type = EnvironmentType.DOCKER
@@ -188,7 +218,15 @@ class ContextEngine:
 
     def _detect_security_controls(self, ctx: SystemContext) -> None:
         """Detect all active MAC frameworks and security daemons."""
+        import platform
         sc = ctx.security_controls
+
+        # All MAC frameworks are Linux-only
+        if platform.system() == "Windows":
+            # Windows Defender check via tasklist
+            tasklist = self._run("tasklist 2>nul").lower()
+            sc.defender_running = "msmpeng.exe" in tasklist
+            return
 
         # SELinux
         sestatus = self._run("sestatus 2>/dev/null").lower()
@@ -199,9 +237,9 @@ class ContextEngine:
         aa_status = self._run("aa-status 2>/dev/null || cat /sys/kernel/security/apparmor/profiles 2>/dev/null")
         sc.apparmor_enabled = bool(aa_status.strip())
 
-        # Seccomp (check if current process has seccomp applied)
+        # Seccomp
         seccomp = self._read_file("/proc/self/status") or ""
-        sc.seccomp_enabled = "Seccomp:\t2" in seccomp  # 2 = filter mode
+        sc.seccomp_enabled = "Seccomp:\t2" in seccomp
 
         # Auditd
         sc.auditd_running = self._process_running("auditd")
@@ -211,12 +249,21 @@ class ContextEngine:
         sc.defender_running    = self._process_running("mdatp")
 
     def _process_running(self, name: str) -> bool:
+        import platform
+        if platform.system() == "Windows":
+            out = self._run(f"tasklist /FI \"IMAGENAME eq {name}.exe\" 2>nul")
+            return name.lower() in out.lower()
         out = self._run(f"pgrep -x {name} 2>/dev/null").strip()
         return bool(out)
 
     # ── Shell detection ───────────────────────────────────────────────────────
 
     def _detect_shell(self, ctx: SystemContext) -> None:
+        import platform
+        if platform.system() == "Windows":
+            ctx.shell_type = ShellType.UNKNOWN
+            return
+
         shell_path = os.environ.get("SHELL", "")
         if "bash" in shell_path:
             ctx.shell_type = ShellType.BASH
@@ -227,7 +274,7 @@ class ContextEngine:
         else:
             ctx.shell_type = ShellType.UNKNOWN
 
-        # Detect restricted shell by attempting to cd to /
+        # Detect restricted shell
         test = self._run("cd / 2>&1; echo $?").strip()
         if "restricted" in test.lower() or (test != "0" and test):
             ctx.shell_type = ShellType.RESTRICTED
@@ -235,10 +282,22 @@ class ContextEngine:
     # ── Network & services ────────────────────────────────────────────────────
 
     def _detect_network(self, ctx: SystemContext) -> None:
-        iface_out = self._run("ip -o link show 2>/dev/null || ifconfig -a 2>/dev/null")
-        ctx.network_interfaces = re.findall(r"^\d+:\s+(\S+):", iface_out, re.MULTILINE)
+        import platform
+        if platform.system() == "Windows":
+            iface_out = self._run("ipconfig 2>nul")
+            ctx.network_interfaces = re.findall(r"adapter (.+?):", iface_out)
+        else:
+            iface_out = self._run("ip -o link show 2>/dev/null || ifconfig -a 2>/dev/null")
+            ctx.network_interfaces = re.findall(r"^\d+:\s+(\S+):", iface_out, re.MULTILINE)
 
     def _detect_services(self, ctx: SystemContext) -> None:
+        import platform
+        if platform.system() == "Windows":
+            svc_out = self._run('sc query type= all state= running 2>nul')
+            ctx.running_services = re.findall(r"SERVICE_NAME:\s+(\S+)", svc_out)
+            ctx.cron_jobs = []  # No cron on Windows
+            return
+
         svc_out = self._run("systemctl list-units --type=service --state=running --no-pager 2>/dev/null | awk '{print $1}'")
         ctx.running_services = [s.strip() for s in svc_out.splitlines() if s.strip().endswith(".service")]
 
@@ -249,9 +308,12 @@ class ContextEngine:
 
     def _detect_container_specifics(self, ctx: SystemContext) -> None:
         """Check for privileged container and exposed Docker socket."""
+        import platform
+        if platform.system() == "Windows":
+            return
+
         ctx.docker_socket_exposed = os.path.exists("/var/run/docker.sock")
 
-        # Privileged container: CAP_SYS_ADMIN is the canonical indicator
         cap_out = self._run("cat /proc/self/status 2>/dev/null | grep CapEff")
         match = re.search(r"CapEff:\s+([0-9a-f]+)", cap_out)
         if match:

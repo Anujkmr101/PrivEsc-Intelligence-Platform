@@ -69,14 +69,13 @@ class ShellCompat:
             self.stealth.throttle()
 
         try:
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                executable="/bin/bash" if self._shell_type != ShellType.RESTRICTED else "/bin/sh",
-            )
+            import platform
+            kwargs: dict = dict(shell=True, capture_output=True, text=True, timeout=timeout)
+            if platform.system() != "Windows":
+                kwargs["executable"] = (
+                    "/bin/sh" if self._restricted else "/bin/bash"
+                )
+            result = subprocess.run(cmd, **kwargs)
             return CommandResult(
                 stdout=result.stdout,
                 stderr=result.stderr,
